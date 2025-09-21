@@ -38,7 +38,6 @@ async def load_cogs(bot, path="./cogs", parent="cogs"):
             except Exception as e:
                 print(f"{Fore.RED}[COG] ❌ Erreur lors du chargement de '{full_cog_path}' : {e}{Style.RESET_ALL}")
 
-# Charger les cogs et synchroniser les commandes slash
 @bot.event
 async def setup_hook():
     await load_cogs(bot)
