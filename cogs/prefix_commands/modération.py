@@ -5,11 +5,14 @@ import json
 import re
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from utils.config import get_bot_config
+from utils.logger import get_logger
 
 # === CONFIG ===
-LOG_CHANNEL_ID = 1418322935789392110
-MODERATOR_ROLE_ID = 1362049467934838985
+_BOT_CFG = get_bot_config()
+LOG_CHANNEL_ID = _BOT_CFG.get("COMMAND_LOG_CHANNEL_ID")
+MODERATOR_ROLE_ID = _BOT_CFG.get("MODERATOR_ROLE_ID")
 DATA_FILE = "mod_data.json"
 MAX_TIMEOUT_SECONDS = 28 * 24 * 3600  # 28 jours en secondes
 
@@ -80,9 +83,13 @@ async def log_action(guild, action, moderator, target, reason):
         title=f"Modération : {action}",
         description=f"Cible : {getattr(target, 'mention', str(target))}\nRaison : {reason}",
         color=discord.Color.blurple(),
-        timestamp=datetime.utcnow()
+        timestamp=datetime.now(timezone.utc)
     )
-    embed.set_footer(text=f"Par {moderator} | {datetime.utcnow().strftime('%d/%m/%Y %H:%M:%S')}")
+    try:
+        mod_text = getattr(moderator, 'mention', str(moderator))
+    except Exception:
+        mod_text = str(moderator)
+    embed.set_footer(text=f"Par {mod_text}")
     await log_channel.send(embed=embed)
 
 # === DROITS MODÉRATEUR ===
@@ -97,25 +104,37 @@ def has_mod_rights(member):
 
 def bot_has_permissions(ctx, perms: list):
     bot_member = ctx.guild.me
+    chan_perms = ctx.channel.permissions_for(bot_member)
     for perm in perms:
-        if not getattr(bot_member.guild_permissions, perm, False):
+        if not getattr(chan_perms, perm, False):
             return False
     return True
 
-def role_hierarchy_check(ctx, target):
-    # Impossible si target >= bot ou owner
+def role_hierarchy_check(ctx, target: discord.Member):
+    # Protéger le propriétaire du serveur
     if target == ctx.guild.owner:
         return False
+    # Hiérarchie vs BOT
     bot_top = ctx.guild.me.top_role.position
     target_top = target.top_role.position
-    return target_top < bot_top
+    if target_top >= bot_top:
+        return False
+    # Hiérarchie vs AUTEUR (modérateur qui lance la commande)
+    author_top = ctx.author.top_role.position
+    if target_top >= author_top and ctx.author != ctx.guild.owner:
+        return False
+    return True
 
 # === COG PRINCIPAL ===
+logger = get_logger(__name__)
+
 class Moderation_prefix(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.mod_data = load_mod_data()
-        self.temp_bans = self.mod_data["temp_bans"]
+        self.temp_bans = self.mod_data.get("temp_bans", [])
+        # Initialise également temp_mutes pour éviter les erreurs futures
+        self.temp_mutes = self.mod_data.get("temp_mutes", [])
         self.check_temps.start()
 
     def cog_unload(self):
@@ -169,6 +188,9 @@ class Moderation_prefix(commands.Cog):
             if seconds == 0:
                 await ctx.send("Durée invalide.")
                 return
+            if seconds > MAX_TIMEOUT_SECONDS:
+                seconds = MAX_TIMEOUT_SECONDS
+                await ctx.send("⏱️ Durée trop longue, limitée à 28 jours.")
             end_time = time.time() + seconds
             self.temp_bans.append({
                 "user_id": member.id,
@@ -195,7 +217,7 @@ class Moderation_prefix(commands.Cog):
             await ctx.send("Accès refusé : tu n'es pas modérateur.")
             return
         if not bot_has_permissions(ctx, ["ban_members"]):
-            await ctx.send("Le bot n'a pas la permission de ban.")
+            await ctx.send("Le bot n'a pas la permission de débannir.")
             return
         # Trouver user
         user_id = None
@@ -234,6 +256,9 @@ class Moderation_prefix(commands.Cog):
             if seconds == 0:
                 await ctx.send("Durée invalide pour rebannir.")
                 return
+            if seconds > MAX_TIMEOUT_SECONDS:
+                seconds = MAX_TIMEOUT_SECONDS
+                await ctx.send("⏱️ Durée trop longue, limitée à 28 jours pour reban.")
             end_time = time.time() + seconds
             self.temp_bans.append({
                 "user_id": user.id,

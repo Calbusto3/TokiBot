@@ -4,11 +4,12 @@
       "id": 1,
       "author_id": 1388279677139026020,
       "author_tag": "geansto",
-      "text": "c\u2019est possible d\u2019\u00eatre addict \u00e0 une sauce ? (genre la mayo ;-;)",
+      "text": "c’est possible d’être addict à une sauce ? (genre la mayo ;-;)",
       "responses": [],
       "timestamp": "2025-09-20T14:51:38.941589",
       "message_id": 1418972887024537692,
-      "reply_to": null
+      "reply_to": null,
+      "channel_id": 1362070352372433087
     },
     {
       "id": 2,
@@ -18,6 +19,42 @@
       "responses": [],
       "timestamp": "2025-09-20T16:57:27.910412",
       "message_id": 1419004558822215920,
+      "reply_to": null,
+      "channel_id": 1362070352372433087
+    },
+    {
+      "id": 3,
+      "author_id": 1033834366822002769,
+      "author_tag": ".calbusto",
+      "text": "voyons voir le taff qu'il a pondu ce goat",
+      "responses": [
+        4
+      ],
+      "timestamp": "2025-09-22T22:35:36.649187+00:00",
+      "message_id": 1419814421534085162,
+      "channel_id": 1333197278550429861,
+      "reply_to": null
+    },
+    {
+      "id": 4,
+      "author_id": 1388279677139026020,
+      "author_tag": "geansto",
+      "text": "frero évite ça c trop",
+      "responses": [],
+      "timestamp": "2025-09-22T22:50:44.080079+00:00",
+      "message_id": 1419818230620487684,
+      "channel_id": 1333197278550429861,
+      "reply_to": 3
+    },
+    {
+      "id": 5,
+      "author_id": 1388279677139026020,
+      "author_tag": "geansto",
+      "text": "après je juge pas hein",
+      "responses": [],
+      "timestamp": "2025-09-22T22:51:36.510881+00:00",
+      "message_id": 1419818448002875392,
+      "channel_id": 1419814421534085162,
       "reply_to": null
     }
   ]
