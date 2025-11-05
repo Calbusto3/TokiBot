@@ -63,7 +63,11 @@ async def on_ready():
         pass
     print(f"{Fore.CYAN}🤖 Bot connecté en tant que {bot.user}{Style.RESET_ALL}")
     print(f"{Fore.CYAN}🔹 Commandes préfixées : {len(bot.commands)}{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}🔹 Commandes slash : {len(bot.tree.get_commands())}{Style.RESET_ALL}")
+    try:
+        slash_count = len(bot.tree.get_commands())  # discord.py >=2.x
+    except Exception:
+        slash_count = 0
+    print(f"{Fore.CYAN}🔹 Commandes slash : {slash_count}{Style.RESET_ALL}")
 
 # Lancer le bot
 if not TOKEN or not TOKEN.strip():
