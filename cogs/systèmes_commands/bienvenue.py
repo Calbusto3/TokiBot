@@ -5,7 +5,7 @@ import os
 import datetime
 import asyncio
 from datetime import datetime as dt, timezone
-from utils.config import get_bot_config
+from utils.config import get_bot_config, read_json, write_json
 
 CONFIG_FILE = "welcome_config.json"
 _BOT_CFG = get_bot_config()
@@ -19,15 +19,19 @@ class WelcomeSystem(commands.Cog):
 
     # Charger la config
     def load_config(self):
-        if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {"active": False, "channel_id": _BOT_CFG.get("WELCOME_CHANNEL_ID")}
+        default = {"active": False, "channel_id": _BOT_CFG.get("WELCOME_CHANNEL_ID")}
+        return read_json(CONFIG_FILE, default)
 
     # Sauvegarder la config
     def save_config(self):
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.config, f, indent=4)
+        ok = write_json(CONFIG_FILE, self.config)
+        if not ok:
+            # fallback minimal to avoid silent failure
+            try:
+                with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                    json.dump(self.config, f, indent=4)
+            except Exception:
+                pass
 
     # Logs d’exécution de commande
     async def log_command(self, ctx):

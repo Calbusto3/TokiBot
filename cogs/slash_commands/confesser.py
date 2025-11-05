@@ -351,6 +351,105 @@ class Confessions(commands.Cog):
             return False
 
     # -------------------------
+    # Modal: Delete confession (owner-only)
+    # -------------------------
+    class DeleteModal(discord.ui.Modal, title="Supprimer la confession"):
+        reason = discord.ui.TextInput(label="Raison (requis)", style=discord.TextStyle.long, required=True, max_length=500)
+
+        def __init__(self, cog: "Confessions", confession_id: int, author: discord.User):
+            super().__init__()
+            self.cog = cog
+            self.confession_id = confession_id
+            self.author = author
+
+        async def on_submit(self, interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
+            try:
+                data = load_confessions()
+                conf = next((c for c in data.get("confessions", []) if c.get("id") == self.confession_id), None)
+                if not conf:
+                    return await interaction.followup.send("❌ Confession introuvable.", ephemeral=True)
+                if conf.get("author_id") != self.author.id:
+                    return await interaction.followup.send("❌ Seul l'auteur peut supprimer sa confession.", ephemeral=True)
+
+                channel_id = conf.get("channel_id")
+                message_id = conf.get("message_id")
+                thread_id = conf.get("thread_id")
+                transcript_text = None
+
+                # Transcript si thread
+                if thread_id:
+                    try:
+                        thread = self.cog.bot.get_channel(thread_id)
+                        if thread and isinstance(thread, discord.Thread):
+                            lines = []
+                            async for m in thread.history(limit=None, oldest_first=True):
+                                ts = m.created_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                                author = f"{m.author} ({m.author.id})"
+                                content = m.content or ""
+                                lines.append(f"[{ts}] {author}: {content}")
+                            transcript_text = "\n".join(lines) if lines else "(Aucun message)"
+                    except Exception as e:
+                        logger.warning(f"Impossible de générer la transcription du thread {thread_id}: {e}")
+
+                # Suppression message + thread
+                try:
+                    if channel_id and message_id:
+                        channel = self.cog.bot.get_channel(channel_id)
+                        if channel:
+                            try:
+                                msg = await channel.fetch_message(message_id)
+                                await msg.delete()
+                            except Exception:
+                                pass
+                    if thread_id:
+                        thread = self.cog.bot.get_channel(thread_id)
+                        if thread and isinstance(thread, discord.Thread):
+                            try:
+                                await thread.delete(reason=f"Suppression par l'auteur: {self.reason.value}")
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+                # Retrait du stockage
+                try:
+                    data["confessions"] = [c for c in data.get("confessions", []) if c.get("id") != self.confession_id]
+                    save_confessions(data)
+                except Exception:
+                    pass
+
+                # Log admin + transcript
+                extra = {
+                    "Confession": f"#{self.confession_id}",
+                    "Auteur": f"{self.author} ({self.author.id})",
+                    "Raison": self.reason.value,
+                }
+                if transcript_text is not None:
+                    try:
+                        file = discord.File(io.BytesIO(transcript_text.encode("utf-8")), filename=f"transcript_confession_{self.confession_id}.txt")
+                        ch = self.cog.bot.get_channel(ADMIN_LOG_CHANNEL_ID)
+                        if ch:
+                            await ch.send(content=f"🗑️ Suppression de la confession #{self.confession_id}", file=file)
+                    except Exception as e:
+                        logger.warning(f"Impossible d'envoyer la transcription: {e}")
+                await self.cog.log_admin(
+                    title=f"Suppression Confession #{self.confession_id}",
+                    description="La confession a été supprimée par son auteur.",
+                    author=self.author,
+                    extra_fields=extra,
+                    color=discord.Color.dark_gray()
+                )
+
+                await interaction.followup.send("✅ Ta confession a été supprimée.", ephemeral=True)
+            except Exception as e:
+                logger.error(f"Erreur dans DeleteModal.on_submit: {e}")
+                try:
+                    await interaction.followup.send("❌ Erreur lors de la suppression.", ephemeral=True)
+                except Exception:
+                    pass
+
+    # -------------------------
     # Persistent dynamic view factory
     # -------------------------
     class DynamicConfessView(discord.ui.View):
@@ -387,12 +486,22 @@ class Confessions(commands.Cog):
             # check ban
             if self.cog.is_banned(interaction.user.id):
                 return await interaction.response.send_message("🚫 Tu es banni du système de confessions.", ephemeral=True)
+            # prevent reporting own confession
+            data = load_confessions()
+            conf = next((c for c in data.get("confessions", []) if c.get("id") == self.confession_id), None)
+            if conf and conf.get("author_id") == interaction.user.id:
+                return await interaction.response.send_message("❌ Tu ne peux pas signaler ta propre confession.", ephemeral=True)
             # open Report modal
             await interaction.response.send_modal(self.cog.ReportModal(self.cog, self.confession_id, interaction.user))
 
         async def _reply_callback(self, interaction: discord.Interaction):
             if self.cog.is_banned(interaction.user.id):
                 return await interaction.response.send_message("🚫 Tu es banni du système de confessions.", ephemeral=True)
+            # prevent replying to own confession
+            data = load_confessions()
+            conf = next((c for c in data.get("confessions", []) if c.get("id") == self.confession_id), None)
+            if conf and conf.get("author_id") == interaction.user.id:
+                return await interaction.response.send_message("❌ Tu ne peux pas répondre à ta propre confession.", ephemeral=True)
             # open Reply modal
             await interaction.response.send_modal(self.cog.ReplyModal(self.cog, self.confession_id, interaction.user))
 
