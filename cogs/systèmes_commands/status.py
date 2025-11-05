@@ -8,7 +8,11 @@ class Status(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        activity = discord.Activity(type=discord.ActivityType.watching, name="Calbusto et Tokita.")
+        # Bots cannot set a separate "custom status" like user accounts; we encode the phrase in the activity name.
+        activity = discord.Activity(
+            type=discord.ActivityType.watching,
+            name="Regarde Calbusto et Tokita • Miam Miam"
+        )
         await self.bot.change_presence(status=discord.Status.online, activity=activity)
         print("[Status] Activité définie")
 

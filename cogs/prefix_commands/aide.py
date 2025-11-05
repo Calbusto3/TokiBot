@@ -8,15 +8,6 @@ from utils.config import get_bot_config
 _BOT_CFG = get_bot_config()
 STAFF_ROLE_ID = _BOT_CFG.get("STAFF_ROLE_ID")
 
-# -------------------- OUTILS --------------------
-def is_staff_or_admin():
-    async def predicate(ctx: commands.Context) -> bool:
-        if getattr(ctx.author.guild_permissions, "administrator", False):
-            return True
-        role = discord.utils.get(ctx.guild.roles, id=STAFF_ROLE_ID)
-        return role in ctx.author.roles if role else False
-    return commands.check(predicate)
-
 def format_usage_prefix(cmd: commands.Command) -> str:
     parts = [f"+{cmd.qualified_name}"]
     if cmd.signature:
@@ -223,7 +214,6 @@ class Help(commands.Cog):
         return emb
 
     @commands.command(name="aide")
-    @is_staff_or_admin()
     async def aide(self, ctx: commands.Context, *, recherche: Optional[str] = None):
         view = self.HelpView(self, ctx, query=recherche or "")
         await ctx.send(embed=self.build_main_embed(recherche or "", "all", 0, len(view.items), view.per_page), view=view)

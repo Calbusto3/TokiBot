@@ -39,6 +39,7 @@ class ModerationSlash(commands.Cog):
     # BAN / UNBAN
     # ======================
     @app_commands.command(name="ban", description="Ban un membre du serveur.")
+    @app_commands.default_permissions(ban_members=True)
     @app_commands.checks.cooldown(1, 5.0)
     @app_commands.describe(member="Membre à bannir", reason="Raison du ban")
     async def ban(self, interaction: discord.Interaction, member: discord.Member, reason: str = None):
@@ -69,6 +70,7 @@ class ModerationSlash(commands.Cog):
         await self.log_action(interaction, "Ban", member, reason)
 
     @app_commands.command(name="unban", description="Unban un utilisateur avec son ID.")
+    @app_commands.default_permissions(ban_members=True)
     @app_commands.checks.cooldown(1, 5.0)
     @app_commands.describe(user_id="ID du membre à débannir")
     async def unban(self, interaction: discord.Interaction, user_id: str):
@@ -101,6 +103,7 @@ class ModerationSlash(commands.Cog):
     # KICK
     # ======================
     @app_commands.command(name="kick", description="Expulse un membre du serveur.")
+    @app_commands.default_permissions(kick_members=True)
     @app_commands.checks.cooldown(1, 5.0)
     @app_commands.describe(member="Membre à expulser", reason="Raison du kick")
     async def kick(self, interaction: discord.Interaction, member: discord.Member, reason: str = None):

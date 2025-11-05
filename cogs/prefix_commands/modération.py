@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from utils.config import get_bot_config
 from utils.logger import get_logger
+from utils.config import read_json, write_json
 
 # === CONFIG ===
 _BOT_CFG = get_bot_config()
@@ -19,19 +20,20 @@ MAX_TIMEOUT_SECONDS = 28 * 24 * 3600  # 28 jours en secondes
 # === UTILS PERSISTENCE ===
 
 def load_mod_data():
-    if os.path.isfile(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-            except Exception:
-                return {"temp_mutes": [], "temp_bans": []}
-            if "temp_mutes" in data and "temp_bans" in data:
-                return data
-    return {"temp_mutes": [], "temp_bans": []}
+    data = read_json(DATA_FILE, {"temp_mutes": [], "temp_bans": []})
+    # Validation basique
+    if not isinstance(data, dict):
+        return {"temp_mutes": [], "temp_bans": []}
+    data.setdefault("temp_mutes", [])
+    data.setdefault("temp_bans", [])
+    return data
 
 def save_mod_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
+    ok = write_json(DATA_FILE, data)
+    if not ok:
+        logger = get_logger(__name__)
+        logger.warning("Échec de sauvegarde de mod_data.json")
+    return ok
 
 # === PARSING DURÉES ===
 

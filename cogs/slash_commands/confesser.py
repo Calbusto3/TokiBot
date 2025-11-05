@@ -1,4 +1,3 @@
-# cogs/slash_commands/confesser.py
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -7,12 +6,16 @@ import os
 from datetime import datetime, timezone
 from utils.datetime_utils import format_iso_str
 from utils.config import get_bot_config
+from utils.logger import get_logger
 import asyncio
-import logging
 import threading
 from typing import Optional, Dict, Any, Tuple
 import time
-
+import io
+import re
+# -------------------------
+# Constantes
+# -------------------------
 CONFESSION_FILE = "confessions.json"
 BANS_FILE = "confession_bans.json"
 CONFIG_FILE = "confession_config.json"
@@ -34,8 +37,8 @@ _file_locks = {
     CONFIG_FILE: threading.Lock()
 }
 
-# Setup logging
-logger = logging.getLogger(__name__)
+# Setup logging (centralized)
+logger = get_logger(__name__)
 
 # -------------------------
 # Utilitaires fichiers JSON avec verrouillage
@@ -199,13 +202,67 @@ class Confessions(commands.Cog):
 
     # ------ helpers ------
     def is_banned(self, user_id: int) -> bool:
-        """Vérifie si un utilisateur est banni."""
+        """Vérifie si un utilisateur est banni (supporte anciens et nouveaux formats).
+        Nouveaux formats: banned: [user_id, {"user_id": int, "until": int|None}]
+        Expire automatiquement les bans dont "until" est passé.
+        """
         try:
             bans = load_bans()
-            return user_id in bans.get("banned", [])
+            banned_list = bans.get("banned", [])
+            changed = False
+            now = int(time.time())
+            result = False
+            new_list = []
+            for entry in banned_list:
+                if isinstance(entry, int):
+                    if entry == user_id:
+                        result = True
+                    new_list.append(entry)
+                else:
+                    uid = entry.get("user_id")
+                    until = entry.get("until")  # epoch seconds or None
+                    if until is not None and now >= int(until):
+                        changed = True  # expired
+                        continue
+                    if uid == user_id:
+                        result = True
+                    new_list.append({"user_id": uid, "until": until})
+            if changed:
+                bans["banned"] = new_list
+                save_bans(bans)
+            return result
         except Exception as e:
             logger.error(f"Erreur lors de la vérification du ban pour {user_id}: {e}")
             return False
+
+    # --- Ban helpers ---
+    def _parse_duration_seconds(self, s: Optional[str]) -> Optional[int]:
+        if not s:
+            return None
+        m = re.match(r"^(\d+)([smhj])$", s.strip().lower())
+        if not m:
+            return None
+        num, unit = m.groups()
+        mult = {"s":1, "m":60, "h":3600, "j":86400}
+        return int(num) * mult[unit]
+
+    def add_ban(self, user_id: int, duration_seconds: Optional[int] = None) -> bool:
+        bans = load_bans()
+        banned = bans.get("banned", [])
+        now = int(time.time())
+        until = (now + int(duration_seconds)) if duration_seconds else None
+        # Remove existing
+        banned = [e for e in banned if (e if isinstance(e,int) else e.get("user_id")) != user_id]
+        banned.append({"user_id": user_id, "until": until})
+        bans["banned"] = banned
+        return save_bans(bans)
+
+    def remove_ban(self, user_id: int) -> bool:
+        bans = load_bans()
+        banned = bans.get("banned", [])
+        banned = [e for e in banned if (e if isinstance(e,int) else e.get("user_id")) != user_id]
+        bans["banned"] = banned
+        return save_bans(bans)
     
     def has_admin_permissions(self, user: discord.User, guild: discord.Guild) -> bool:
         """Vérifie si l'utilisateur a les permissions d'administration."""
@@ -320,6 +377,12 @@ class Confessions(commands.Cog):
                 btn_reply.callback = self._reply_callback
                 self.add_item(btn_reply)
 
+            # Bouton Supprimer (propriétaire uniquement)
+            delete_id = f"confess_delete:{confession_id}"
+            btn_delete = discord.ui.Button(style=discord.ButtonStyle.secondary, label="Supprimer", custom_id=delete_id)
+            btn_delete.callback = self._delete_callback
+            self.add_item(btn_delete)
+
         async def _report_callback(self, interaction: discord.Interaction):
             # check ban
             if self.cog.is_banned(interaction.user.id):
@@ -332,6 +395,16 @@ class Confessions(commands.Cog):
                 return await interaction.response.send_message("🚫 Tu es banni du système de confessions.", ephemeral=True)
             # open Reply modal
             await interaction.response.send_modal(self.cog.ReplyModal(self.cog, self.confession_id, interaction.user))
+
+        async def _delete_callback(self, interaction: discord.Interaction):
+            # Only the original author can delete
+            data = load_confessions()
+            conf = next((c for c in data.get("confessions", []) if c.get("id") == self.confession_id), None)
+            if not conf:
+                return await interaction.response.send_message("❌ Confession introuvable.", ephemeral=True)
+            if conf.get("author_id") != interaction.user.id:
+                return await interaction.response.send_message("❌ Seul l'auteur de la confession peut la supprimer.", ephemeral=True)
+            await interaction.response.send_modal(self.cog.DeleteModal(self.cog, self.confession_id, interaction.user))
 
     # -------------------------
     # Modal: Confess (slash)
@@ -473,7 +546,7 @@ class Confessions(commands.Cog):
     # Modal: Report
     # -------------------------
     class ReportModal(discord.ui.Modal, title="Signaler une confession"):
-        reason = discord.ui.TextInput(label="Raison (optionnel)", style=discord.TextStyle.short, required=False, max_length=500)
+        reason = discord.ui.TextInput(label="Raison du signalement (optionnel)", style=discord.TextStyle.long, required=False, max_length=500)
 
         def __init__(self, cog: "Confessions", confession_id: int, reporter: discord.User):
             super().__init__()
@@ -697,6 +770,13 @@ class Confessions(commands.Cog):
                         thread_msg = await thread.send(embed=embed, view=view)
                         resp_obj["message_id"] = thread_msg.id
                         save_confessions(data)
+
+                        # Store thread id in parent for management (delete transcripts, etc.)
+                        try:
+                            parent["thread_id"] = thread.id
+                            save_confessions(data)
+                        except Exception:
+                            pass
 
                         # remove buttons from original parent message (so no more replies there)
                         try:

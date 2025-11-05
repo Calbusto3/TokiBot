@@ -6,19 +6,15 @@ import os
 from datetime import datetime, timezone
 from utils.config import get_bot_config
 from utils.logger import get_logger
+from utils.config import read_json, write_json
+from utils.permissions import is_admin_or_role
 
 _BOT_CFG = get_bot_config()
 MODERATOR_ROLE_ID = _BOT_CFG.get("MODERATOR_ROLE_ID")
 LOG_COMMANDS_CHANNEL_ID = _BOT_CFG.get("COMMAND_LOG_CHANNEL_ID")
 DATA_FILE = "say_messages.json"
 
-def has_moderator_or_admin():
-    async def predicate(ctx):
-        if ctx.author.guild_permissions.administrator:
-            return True
-        mod_role = get(ctx.guild.roles, id=MODERATOR_ROLE_ID)
-        return mod_role in ctx.author.roles if mod_role else False
-    return commands.check(predicate)
+has_moderator_or_admin = lambda: is_admin_or_role(MODERATOR_ROLE_ID)
 
 logger = get_logger(__name__)
 
@@ -251,13 +247,14 @@ class ExtraCommands(commands.Cog):
             return await ctx.send(f"❌ Impossible d'envoyer le message : {e}")
 
         # Sauvegarde persistance
-        self.data["messages"][str(sent.id)] = {
+        self.data.setdefault("messages", {})[str(sent.id)] = {
             "content": content,
             "channel_id": sent.channel.id,
             "author_id": ctx.author.id,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
-        save_data(self.data)
+        if not save_data(self.data):
+            logger.warning("Échec de sauvegarde de say_messages.json après +parler")
 
         # Log
         await self.log_command(ctx, reason=f"+parler vers {sent.channel.mention} | ID: {sent.id}")
@@ -285,9 +282,10 @@ class ExtraCommands(commands.Cog):
             return await ctx.send("❌ Je n’ai pas la permission de modifier ce message.")
 
         # Mettre à jour persistance
-        self.data["messages"][str(message_id)]["content"] = new_content
+        self.data.setdefault("messages", {}).setdefault(str(message_id), {})["content"] = new_content
         self.data["messages"][str(message_id)]["edited_at"] = datetime.now(timezone.utc).isoformat()
-        save_data(self.data)
+        if not save_data(self.data):
+            logger.warning("Échec de sauvegarde de say_messages.json après modif_say")
 
         await ctx.send(f"✅ Message `{message_id}` modifié avec succès.")
 
@@ -295,15 +293,10 @@ class ExtraCommands(commands.Cog):
         await self.log_command(ctx, reason=f"+modif_say ID {message_id}")
 
 def load_data():
-    if not os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump({"messages": {}}, f, indent=2)
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return read_json(DATA_FILE, {"messages": {}})
 
 def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    return write_json(DATA_FILE, data)
 
 async def setup(bot):
     await bot.add_cog(ExtraCommands(bot))

@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from colorama import Fore, Style, init
 from keep_alive import keep_alive
 from utils.logger import get_logger
+from utils.uptime import set_start
 
 keep_alive() 
 # Init colorama (pour Windows)
@@ -55,6 +56,11 @@ async def setup_hook():
 # Quand le bot est prêt
 @bot.event
 async def on_ready():
+    # Set uptime start on first ready
+    try:
+        set_start()
+    except Exception:
+        pass
     print(f"{Fore.CYAN}🤖 Bot connecté en tant que {bot.user}{Style.RESET_ALL}")
     print(f"{Fore.CYAN}🔹 Commandes préfixées : {len(bot.commands)}{Style.RESET_ALL}")
     print(f"{Fore.CYAN}🔹 Commandes slash : {len(bot.tree.get_commands())}{Style.RESET_ALL}")
