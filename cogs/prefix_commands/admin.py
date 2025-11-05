@@ -2,12 +2,19 @@ import discord
 from discord.ext import commands
 import os
 import sys
+from utils.config import get_bot_config
 
-ALLOWED_USER_ID = 1033834366822002769  # ID de l'utilisateur autorisé en plus du owner
+_BOT_CFG = get_bot_config()
+EXTRA_OWNER_IDS = set(_BOT_CFG.get("EXTRA_OWNER_IDS", []))
 
 def is_owner_or_specific_user():
     async def predicate(ctx):
-        return await ctx.bot.is_owner(ctx.author) or ctx.author.id == ALLOWED_USER_ID
+        try:
+            if await ctx.bot.is_owner(ctx.author):
+                return True
+        except Exception:
+            pass
+        return ctx.author.id in EXTRA_OWNER_IDS
     return commands.check(predicate)
 
 class Admin(commands.Cog):
@@ -27,7 +34,7 @@ class Admin(commands.Cog):
     async def reboot(self, ctx):
         await ctx.send("🔄 Redémarrage du bot...")
         await self.bot.close()
-        os.execv(sys.executable, ["python"] + sys.argv)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
     # Commande pour afficher l’état des cogs
     @commands.command(name="cogs")

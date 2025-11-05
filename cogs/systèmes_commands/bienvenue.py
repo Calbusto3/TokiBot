@@ -4,9 +4,12 @@ import json
 import os
 import datetime
 import asyncio
+from datetime import datetime as dt, timezone
+from utils.config import get_bot_config
 
 CONFIG_FILE = "welcome_config.json"
-LOG_CHANNEL_ID = 1418322935789392110
+_BOT_CFG = get_bot_config()
+LOG_CHANNEL_ID = _BOT_CFG.get("COMMAND_LOG_CHANNEL_ID")
 
 class WelcomeSystem(commands.Cog):
     def __init__(self, bot):
@@ -19,7 +22,7 @@ class WelcomeSystem(commands.Cog):
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        return {"active": False, "channel_id": 1362060484085547018}
+        return {"active": False, "channel_id": _BOT_CFG.get("WELCOME_CHANNEL_ID")}
 
     # Sauvegarder la config
     def save_config(self):
@@ -33,7 +36,7 @@ class WelcomeSystem(commands.Cog):
             embed = discord.Embed(
                 title="📜 Commande exécutée",
                 color=discord.Color.orange(),
-                timestamp=datetime.datetime.utcnow()
+                timestamp=dt.now(timezone.utc)
             )
             embed.add_field(name="Utilisateur", value=f"{ctx.author} ({ctx.author.id})", inline=False)
             embed.add_field(name="Commande", value=ctx.message.content, inline=False)
@@ -104,11 +107,11 @@ class WelcomeSystem(commands.Cog):
             f"🎉 {member.name} a atterri parmi nous !",
             "✨ Une nouvelle étoile brille dans le serveur !",
             "🔥 Préparez-vous, quelqu’un débarque !",
-            f"👀 Regardez qui vient d’arriver : {member.name} !"
+            f"👀 Regardez qui vient d’arriver : {member.name} !",
             "T'as pas oublié de prendre une pizza ?",
-            f"T'es là, t'as plus le droit de partir, {member.name} !"
-            f"Soitez tous bienvenu à {member.name} !"
-            "Wawawawawawa, bonne arrivée !"
+            f"T'es là, t'as plus le droit de partir, {member.name} !",
+            f"Soyez tous les bienvenus à {member.name} !",
+            "Wawawawawawa, bonne arrivée !",
         ]
         import random
         title = random.choice(titles)
@@ -134,12 +137,21 @@ class WelcomeSystem(commands.Cog):
         await welcome_channel.send(f"{member.mention}")
         embed = discord.Embed(
             title=title,
-            description=f"Bienvenue sur **{guild.name}** ! Nous t'espérons un bon séjours parmis nous, amuse toi bien ^^ 🎊\n"
+            description=f"Bienvenue sur **{guild.name}** ! Nous t'espérons un bon séjour parmi nous, amuse-toi bien ^^ 🎊\n"
                         f"👥 Tu es le membre n° **{member_count}**\n"
                         f"🔗 {inviter}",
             color=discord.Color.green()
         )
-        embed.set_thumbnail(url=member.avatar.url if member.avatar else guild.icon.url)
+        thumb_url = None
+        try:
+            if getattr(member, "avatar", None):
+                thumb_url = member.avatar.url
+            elif getattr(guild, "icon", None):
+                thumb_url = guild.icon.url
+        except Exception:
+            thumb_url = None
+        if thumb_url:
+            embed.set_thumbnail(url=thumb_url)
         await welcome_channel.send(embed=embed)
 
 async def setup(bot):

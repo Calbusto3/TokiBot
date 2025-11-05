@@ -4,6 +4,7 @@ import os
 from dotenv import load_dotenv
 from colorama import Fore, Style, init
 from keep_alive import keep_alive
+from utils.logger import get_logger
 
 keep_alive() 
 # Init colorama (pour Windows)
@@ -12,12 +13,14 @@ init(autoreset=True)
 # Charger les variables d'environnement
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
+logger = get_logger(__name__)
 
 # Définir les intents
 intents = discord.Intents.all()
 
 # Créer le bot
-bot = commands.Bot(command_prefix="+", intents=intents, help_command=None)
+allowed = discord.AllowedMentions(everyone=False, roles=False, users=True, replied_user=False)
+bot = commands.Bot(command_prefix="+", intents=intents, help_command=None, allowed_mentions=allowed)
 
 # Fonction récursive pour charger tous les cogs
 async def load_cogs(bot, path="./cogs", parent="cogs"):
@@ -47,6 +50,7 @@ async def setup_hook():
         print(f"{Fore.MAGENTA}[SYNC] ✅ {len(synced)} commandes synchronisées avec Discord{Style.RESET_ALL}")
     except Exception as e:
         print(f"{Fore.RED}[SYNC] ❌ Erreur lors de la synchronisation des commandes : {e}{Style.RESET_ALL}")
+        logger.exception("Erreur lors de la synchronisation des commandes")
 
 # Quand le bot est prêt
 @bot.event
@@ -56,4 +60,8 @@ async def on_ready():
     print(f"{Fore.CYAN}🔹 Commandes slash : {len(bot.tree.get_commands())}{Style.RESET_ALL}")
 
 # Lancer le bot
+if not TOKEN or not TOKEN.strip():
+    logger.error("DISCORD_TOKEN manquant dans l'environnement. Ajoutez-le au fichier .env sous la clé DISCORD_TOKEN.")
+    raise SystemExit(1)
+
 bot.run(TOKEN)

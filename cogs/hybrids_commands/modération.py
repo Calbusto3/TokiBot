@@ -2,7 +2,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, timezone
 
 COMMAND_LOG_CHANNEL_ID = 1418322935789392110  # salon logs commandes
 
@@ -40,7 +40,7 @@ async def log_command(bot, title: str, description: str, moderator: discord.User
     ch = bot.get_channel(COMMAND_LOG_CHANNEL_ID)
     if not ch:
         return
-    embed = discord.Embed(title=title, description=description, color=color, timestamp=datetime.utcnow())
+    embed = discord.Embed(title=title, description=description, color=color, timestamp=datetime.now(timezone.utc))
     if moderator:
         embed.add_field(name="Modérateur", value=f"{moderator} ({moderator.id})", inline=True)
     try:

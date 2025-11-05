@@ -3,10 +3,13 @@ from discord.ext import commands
 from discord.utils import get
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
+from utils.config import get_bot_config
+from utils.logger import get_logger
 
-MODERATOR_ROLE_ID = 1362049467934838985
-LOG_COMMANDS_CHANNEL_ID = 1418322935789392110
+_BOT_CFG = get_bot_config()
+MODERATOR_ROLE_ID = _BOT_CFG.get("MODERATOR_ROLE_ID")
+LOG_COMMANDS_CHANNEL_ID = _BOT_CFG.get("COMMAND_LOG_CHANNEL_ID")
 DATA_FILE = "say_messages.json"
 
 def has_moderator_or_admin():
@@ -17,6 +20,7 @@ def has_moderator_or_admin():
         return mod_role in ctx.author.roles if mod_role else False
     return commands.check(predicate)
 
+logger = get_logger(__name__)
 
 class ExtraCommands(commands.Cog):
     def __init__(self, bot):
@@ -30,15 +34,18 @@ class ExtraCommands(commands.Cog):
             embed = discord.Embed(
                 title="Commande exécutée",
                 color=discord.Color.blue(),
-                timestamp=datetime.datetime.utcnow()
+                timestamp=datetime.now(timezone.utc)
             )
             embed.add_field(name="Auteur", value=f"{ctx.author} ({ctx.author.id})", inline=False)
             embed.add_field(name="Nom d'utilisateur", value=f"{ctx.author.name}#{ctx.author.discriminator}", inline=False)
-            embed.add_field(name="Commande", value=ctx.command, inline=False)
+            embed.add_field(name="Commande", value=str(ctx.command), inline=False)
             embed.add_field(name="Salon", value=f"{ctx.channel} ({ctx.channel.id})", inline=False)
             if reason:
                 embed.add_field(name="Raison", value=reason, inline=False)
-            await log_channel.send(embed=embed)
+            try:
+                await log_channel.send(embed=embed)
+            except Exception as e:
+                logger.warning(f"Impossible d'envoyer le log de commande: {e}")
 
     # ---------------- AVATAR ----------------
     @commands.command(name="avatar")
@@ -53,7 +60,18 @@ class ExtraCommands(commands.Cog):
     @commands.command(name="banner")
     async def bannier(self, ctx, member: discord.Member = None):
         member = member or ctx.author
-        banner_url = member.banner.url if member.banner else None
+        banner_url = None
+        try:
+            # Tente via fetch_user pour obtenir la bannière si absente
+            user = await self.bot.fetch_user(member.id)
+            if user and user.banner:
+                banner_url = user.banner.url
+            elif member.banner:
+                banner_url = member.banner.url
+        except Exception:
+            if member.banner:
+                banner_url = member.banner.url
+
         if banner_url:
             embed = discord.Embed(title=f"Bannière de {member}", color=discord.Color.blurple())
             embed.set_image(url=banner_url)
@@ -82,18 +100,18 @@ class ExtraCommands(commands.Cog):
     async def hide(self, ctx, channel: discord.TextChannel = None, *, reason: str = None):
         channel = channel or ctx.channel
         if not reason:
-            return await ctx.send("❌ Vous devez fournir une raison >.<", ephemeral=True)
+            return await ctx.send("❌ Vous devez fournir une raison.")
 
-        overwrite = channel.overwrites_for(ctx.guild.default_role)
-        overwrite.view_channel = False
-        await channel.set_permissions(ctx.guild.default_role, overwrite=overwrite)
+        try:
+            overwrite = channel.overwrites_for(ctx.guild.default_role)
+            overwrite.view_channel = False
+            await channel.set_permissions(ctx.guild.default_role, overwrite=overwrite)
+        except discord.Forbidden:
+            return await ctx.send("❌ Je n'ai pas la permission de modifier les permissions de ce salon.")
+        except Exception as e:
+            return await ctx.send(f"❌ Erreur: {e}")
 
-        for role in ctx.guild.roles:
-            if role.id in [MODERATOR_ROLE_ID] or ctx.author.guild_permissions.administrator:
-                continue
-            await channel.set_permissions(role, overwrite=overwrite)
-
-        await ctx.send(f"🔒 Le salon {channel.mention} a été masqué par vous :3\nRaison : {reason}", ephemeral=True)
+        await ctx.send(f"🔒 Le salon {channel.mention} a été masqué.\nRaison : {reason}")
         await self.log_command(ctx, reason=reason)
 
     # ---------------- UNHIDE ----------------
@@ -101,12 +119,15 @@ class ExtraCommands(commands.Cog):
     @has_moderator_or_admin()
     async def unhide(self, ctx, channel: discord.TextChannel = None):
         channel = channel or ctx.channel
-        await channel.set_permissions(ctx.guild.default_role, overwrite=None)
-        for role in ctx.guild.roles:
-            if role.id in [MODERATOR_ROLE_ID] or ctx.author.guild_permissions.administrator:
-                continue
-            await channel.set_permissions(role, overwrite=None)
-        await ctx.send(f"✅ Le salon {channel.mention} est de nouveau visible :D", ephemeral=True)
+        try:
+            overwrite = channel.overwrites_for(ctx.guild.default_role)
+            overwrite.view_channel = None  # retour à l'héritage
+            await channel.set_permissions(ctx.guild.default_role, overwrite=overwrite)
+        except discord.Forbidden:
+            return await ctx.send("❌ Je n'ai pas la permission de modifier les permissions de ce salon.")
+        except Exception as e:
+            return await ctx.send(f"❌ Erreur: {e}")
+        await ctx.send(f"✅ Le salon {channel.mention} est de nouveau visible.")
         await self.log_command(ctx)
 
     # ---------------- LOCK ----------------
@@ -115,18 +136,18 @@ class ExtraCommands(commands.Cog):
     async def lock(self, ctx, channel: discord.TextChannel = None, *, reason: str = None):
         channel = channel or ctx.channel
         if not reason:
-            return await ctx.send("❌ Vous devez fournir une raison >.<", ephemeral=True)
+            return await ctx.send("❌ Vous devez fournir une raison.")
 
-        overwrite = channel.overwrites_for(ctx.guild.default_role)
-        overwrite.send_messages = False
-        await channel.set_permissions(ctx.guild.default_role, overwrite=overwrite)
+        try:
+            overwrite = channel.overwrites_for(ctx.guild.default_role)
+            overwrite.send_messages = False
+            await channel.set_permissions(ctx.guild.default_role, overwrite=overwrite)
+        except discord.Forbidden:
+            return await ctx.send("❌ Je n'ai pas la permission de modifier les permissions de ce salon.")
+        except Exception as e:
+            return await ctx.send(f"❌ Erreur: {e}")
 
-        for role in ctx.guild.roles:
-            if role.id in [MODERATOR_ROLE_ID] or ctx.author.guild_permissions.administrator:
-                continue
-            await channel.set_permissions(role, overwrite=overwrite)
-
-        await ctx.send(f"🔒 Le salon {channel.mention} a été verrouillé.\nRaison : {reason}", ephemeral=True)
+        await ctx.send(f"🔒 Le salon {channel.mention} a été verrouillé.\nRaison : {reason}")
         await self.log_command(ctx, reason=reason)
 
     # ---------------- UNLOCK ----------------
@@ -134,67 +155,79 @@ class ExtraCommands(commands.Cog):
     @has_moderator_or_admin()
     async def unlock(self, ctx, channel: discord.TextChannel = None):
         channel = channel or ctx.channel
-        await channel.set_permissions(ctx.guild.default_role, overwrite=None)
-        for role in ctx.guild.roles:
-            if role.id in [MODERATOR_ROLE_ID] or ctx.author.guild_permissions.administrator:
-                continue
-            await channel.set_permissions(role, overwrite=None)
-        await ctx.send(f"✅ Le salon {channel.mention} est de nouveau déverrouillé.", ephemeral=True)
+        try:
+            overwrite = channel.overwrites_for(ctx.guild.default_role)
+            overwrite.send_messages = None  # retour à l'héritage
+            await channel.set_permissions(ctx.guild.default_role, overwrite=overwrite)
+        except discord.Forbidden:
+            return await ctx.send("❌ Je n'ai pas la permission de modifier les permissions de ce salon.")
+        except Exception as e:
+            return await ctx.send(f"❌ Erreur: {e}")
+        await ctx.send(f"✅ Le salon {channel.mention} est de nouveau déverrouillé.")
         await self.log_command(ctx)
 
-
-    @commands.command(name="clear", aliases = ["supp"])
+    @commands.command(name="clear", aliases=["supp"])
+    @commands.cooldown(1, 5, commands.BucketType.user)
     @has_moderator_or_admin()
-    async def supprimer(ctx, nombre: int):
-        if nombre <= 1:
-            await ctx.send("Il faut que le nombre soit supérieur à 1 >.<")
-            return
-        
-        deleted = await ctx.channel.purge(limit=nombre)
-        await ctx.send(f"{len(deleted)} messages supprimés.", delete_after=5)
-        
+    async def supprimer(self, ctx, nombre: int):
+        if nombre <= 0:
+            return await ctx.send("❌ Le nombre doit être supérieur à 0.")
+        try:
+            deleted = await ctx.channel.purge(limit=nombre)
+            await ctx.send(f"🧹 {len(deleted)} messages supprimés.")
+        except discord.Forbidden:
+            await ctx.send("❌ Je n'ai pas la permission de supprimer des messages ici.")
+        except Exception as e:
+            await ctx.send(f"❌ Erreur: {e}")
+
     # ===== RESET =====
     @commands.command(name="reset", description="Réinitialise et supprime tous les messages d'un salon.")
+    @commands.cooldown(1, 30, commands.BucketType.channel)
     @has_moderator_or_admin()
-    async def reset(ctx, channel: discord.TextChannel = None):
+    async def reset(self, ctx, channel: discord.TextChannel = None):
         channel = channel or ctx.channel
         if not ctx.author.guild_permissions.manage_messages:
-            await ctx.send("❌ Vous n'avez pas la permission pour cette commande ;)")
-            return
+            return await ctx.send("❌ Vous n'avez pas la permission pour cette commande.")
+        # Confirmation interactive
+        class ConfirmView(discord.ui.View):
+            def __init__(self, author: discord.Member):
+                super().__init__(timeout=30)
+                self.author = author
+                self.value = None
 
-        await channel.purge()
-        reset_message = await channel.send("⚠️ Ce salon a été réinitialisé.")
-        await reset_message.delete(delay=5)
+            async def interaction_check(self, interaction: discord.Interaction) -> bool:
+                if interaction.user.id != self.author.id:
+                    await interaction.response.send_message("❌ Seul l'auteur peut confirmer.", ephemeral=True)
+                    return False
+                return True
 
-# cogs/prefix_commands/extra.py
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump({"messages": {}}, f, indent=2)
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+            @discord.ui.button(label="Confirmer", style=discord.ButtonStyle.danger)
+            async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+                self.value = True
+                await interaction.response.defer()
+                self.stop()
 
+            @discord.ui.button(label="Annuler", style=discord.ButtonStyle.secondary)
+            async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+                self.value = False
+                await interaction.response.defer()
+                self.stop()
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+        view = ConfirmView(ctx.author)
+        prompt = await ctx.send("⚠️ Confirmer la réinitialisation de ce salon ?", view=view)
+        await view.wait()
+        await prompt.edit(view=None)
+        if not view.value:
+            return await ctx.send("❎ Réinitialisation annulée.")
 
-
-async def log_command(bot, title: str, description: str, author: discord.User, color=discord.Color.blue()):
-    channel = bot.get_channel(LOG_COMMANDS_CHANNEL_ID)
-    if not channel:
-        return
-    embed = discord.Embed(
-        title=title,
-        description=description,
-        color=color,
-        timestamp=datetime.utcnow()
-    )
-    embed.set_author(name=str(author), icon_url=author.display_avatar.url)
-    try:
-        await channel.send(embed=embed)
-    except Exception:
-        pass
+        try:
+            await channel.purge()
+            msg = await channel.send("⚠️ Ce salon a été réinitialisé.")
+            await msg.delete(delay=5)
+        except discord.Forbidden:
+            await ctx.send("❌ Je n'ai pas la permission nécessaire pour réinitialiser ce salon.")
+        except Exception as e:
+            await ctx.send(f"❌ Erreur: {e}")
 
     @commands.command(name="parler")
     @commands.has_permissions(administrator=True)
@@ -215,25 +248,19 @@ async def log_command(bot, title: str, description: str, author: discord.User, c
         try:
             sent = await target_channel.send(content)
         except Exception as e:
-            return await ctx.send(f"❌ Impossible d'envoyer le message : {e}", delete_after=5)
+            return await ctx.send(f"❌ Impossible d'envoyer le message : {e}")
 
         # Sauvegarde persistance
         self.data["messages"][str(sent.id)] = {
             "content": content,
             "channel_id": sent.channel.id,
             "author_id": ctx.author.id,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         save_data(self.data)
 
         # Log
-        await log_command(
-            self.bot,
-            "Commande +parler exécutée",
-            f"Message envoyé dans {sent.channel.mention}\nID: {sent.id}\nContenu: {content}",
-            author=ctx.author,
-            color=discord.Color.green()
-        )
+        await self.log_command(ctx, reason=f"+parler vers {sent.channel.mention} | ID: {sent.id}")
 
     @commands.command(name="modif_say")
     @commands.has_permissions(administrator=True)
@@ -243,35 +270,40 @@ async def log_command(bot, title: str, description: str, author: discord.User, c
         """
         record = self.data["messages"].get(str(message_id))
         if not record:
-            return await ctx.send("❌ Aucun message trouvé avec cet ID.", delete_after=5)
+            return await ctx.send("❌ Aucun message trouvé avec cet ID.")
 
         channel = self.bot.get_channel(record["channel_id"])
         if not channel:
-            return await ctx.send("❌ Salon introuvable.", delete_after=5)
+            return await ctx.send("❌ Salon introuvable.")
 
         try:
             msg = await channel.fetch_message(message_id)
             await msg.edit(content=new_content)
         except discord.NotFound:
-            return await ctx.send("❌ Message introuvable (supprimé ?).", delete_after=5)
+            return await ctx.send("❌ Message introuvable (supprimé ?).")
         except discord.Forbidden:
-            return await ctx.send("❌ Je n’ai pas la permission de modifier ce message.", delete_after=5)
+            return await ctx.send("❌ Je n’ai pas la permission de modifier ce message.")
 
         # Mettre à jour persistance
         self.data["messages"][str(message_id)]["content"] = new_content
-        self.data["messages"][str(message_id)]["edited_at"] = datetime.utcnow().isoformat()
+        self.data["messages"][str(message_id)]["edited_at"] = datetime.now(timezone.utc).isoformat()
         save_data(self.data)
 
-        await ctx.send(f"✅ Message `{message_id}` modifié avec succès.", delete_after=5)
+        await ctx.send(f"✅ Message `{message_id}` modifié avec succès.")
 
         # Log
-        await log_command(
-            self.bot,
-            "Commande +modif_say exécutée",
-            f"Message ID {message_id} modifié\nNouveau contenu: {new_content}",
-            author=ctx.author,
-            color=discord.Color.orange()
-        )
+        await self.log_command(ctx, reason=f"+modif_say ID {message_id}")
+
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump({"messages": {}}, f, indent=2)
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
 
 async def setup(bot):
     await bot.add_cog(ExtraCommands(bot))
