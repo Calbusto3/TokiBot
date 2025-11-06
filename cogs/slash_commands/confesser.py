@@ -19,6 +19,7 @@ import re
 CONFESSION_FILE = "confessions.json"
 BANS_FILE = "confession_bans.json"
 CONFIG_FILE = "confession_config.json"
+REPORTS_FILE = "confession_reports.json"
 
 # Centralized configuration
 _BOT_CFG = get_bot_config()
@@ -34,7 +35,8 @@ RATE_LIMIT_WINDOW = 3600  # 1 hour in seconds
 _file_locks = {
     CONFESSION_FILE: threading.Lock(),
     BANS_FILE: threading.Lock(),
-    CONFIG_FILE: threading.Lock()
+    CONFIG_FILE: threading.Lock(),
+    REPORTS_FILE: threading.Lock(),
 }
 
 # Setup logging (centralized)
@@ -127,6 +129,14 @@ def load_config() -> Dict[str, Any]:
 def save_config(data: Dict[str, Any]) -> bool:
     """Sauvegarde la configuration avec gestion d'erreurs."""
     return save_json_safe(CONFIG_FILE, data)
+
+def load_reports() -> Dict[str, Any]:
+    """Charge les signalements persistants."""
+    return load_json_safe(REPORTS_FILE, {"reports": []})
+
+def save_reports(data: Dict[str, Any]) -> bool:
+    """Sauvegarde les signalements persistants."""
+    return save_json_safe(REPORTS_FILE, data)
 
 def next_conf_id(data: Dict[str, Any]) -> int:
     """Génère le prochain ID de confession."""
@@ -686,8 +696,29 @@ class Confessions(commands.Cog):
                     await interaction.followup.send("❌ Confession introuvable.", ephemeral=True)
                     return
 
+                # Empêcher le signalement de sa propre confession (vérification côté modal)
+                if confession.get("author_id") == self.reporter.id:
+                    await interaction.followup.send("❌ Tu ne peux pas signaler ta propre confession.", ephemeral=True)
+                    return
+
                 # Mise à jour du message de confirmation
                 await interaction.edit_original_response(content="✅ Signalement enregistré avec succès !")
+
+                # Persistance du signalement
+                try:
+                    rpt = load_reports()
+                    reports = rpt.get("reports", [])
+                    reports.append({
+                        "confession_id": int(self.confession_id),
+                        "reporter_id": int(self.reporter.id),
+                        "reporter_tag": str(self.reporter),
+                        "reason": reason,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+                    rpt["reports"] = reports
+                    save_reports(rpt)
+                except Exception as e:
+                    logger.warning(f"Impossible d'enregistrer le signalement: {e}")
 
                 # Log de signalement pour les administrateurs
                 report_embed = discord.Embed(
@@ -788,6 +819,11 @@ class Confessions(commands.Cog):
                 parent = next((c for c in data.get("confessions", []) if c.get("id") == self.confession_id), None)
                 if not parent:
                     await interaction.followup.send("❌ Confession introuvable.", ephemeral=True)
+                    return
+
+                # Empêcher de répondre à sa propre confession (vérification côté modal)
+                if parent.get("author_id") == self.replier.id:
+                    await interaction.followup.send("❌ Tu ne peux pas répondre à ta propre confession.", ephemeral=True)
                     return
 
                 # Création de la nouvelle entrée de réponse
