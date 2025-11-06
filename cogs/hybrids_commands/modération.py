@@ -3,8 +3,10 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from datetime import timedelta, datetime, timezone
+from utils.config import get_bot_config
 
-COMMAND_LOG_CHANNEL_ID = 1418322935789392110  # salon logs commandes
+_BOT_CFG = get_bot_config()
+COMMAND_LOG_CHANNEL_ID = _BOT_CFG.get("COMMAND_LOG_CHANNEL_ID")
 
 # -------------------------
 # Utils
@@ -37,13 +39,13 @@ async def send_dm_safe(user: discord.User, embed: discord.Embed):
 
 
 async def log_command(bot, title: str, description: str, moderator: discord.User | None = None, color=discord.Color.blue()):
-    ch = bot.get_channel(COMMAND_LOG_CHANNEL_ID)
-    if not ch:
-        return
-    embed = discord.Embed(title=title, description=description, color=color, timestamp=datetime.now(timezone.utc))
-    if moderator:
-        embed.add_field(name="Modérateur", value=f"{moderator} ({moderator.id})", inline=True)
     try:
+        ch = bot.get_channel(COMMAND_LOG_CHANNEL_ID)
+        if not ch:
+            return
+        embed = discord.Embed(title=title, description=description, color=color, timestamp=datetime.now(timezone.utc))
+        if moderator:
+            embed.add_field(name="Modérateur", value=f"{moderator} ({moderator.id})", inline=True)
         await ch.send(embed=embed)
     except Exception:
         pass

@@ -1,8 +1,6 @@
 import discord
 from discord.ext import commands
 import json
-import os
-import datetime
 import asyncio
 from datetime import datetime as dt, timezone
 from utils.config import get_bot_config, read_json, write_json
@@ -92,7 +90,11 @@ class WelcomeSystem(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         for guild in self.bot.guilds:
-            self.invites[guild.id] = await guild.invites()
+            try:
+                self.invites[guild.id] = await guild.invites()
+            except Exception:
+                # Permissions manquantes ou API indisponible
+                self.invites[guild.id] = []
 
     # Détecter l’inviteur lors d’un join
     @commands.Cog.listener()
@@ -102,6 +104,12 @@ class WelcomeSystem(commands.Cog):
 
         guild = member.guild
         welcome_channel = self.bot.get_channel(self.config.get("channel_id"))
+        if not welcome_channel:
+            # Fallback vers le salon système si configuré
+            try:
+                welcome_channel = guild.system_channel
+            except Exception:
+                welcome_channel = None
         if not welcome_channel:
             return
 

@@ -106,75 +106,15 @@ def save_json_safe(filepath: str, data: Dict[str, Any]) -> bool:
                     os.remove(f"{filepath}.tmp")
             except Exception:
                 pass
-
-    # -------------------------
-    # Admin slash: lister/exporter les signalements
-    # -------------------------
-    @app_commands.command(name="confession_reports", description="Lister ou exporter les signalements de confessions")
-    @app_commands.default_permissions(manage_messages=True)
-    @app_commands.describe(user="Filtrer par utilisateur ayant signalé", export="Exporter en fichier .txt", limit="Nombre max de lignes (par défaut 100)")
-    async def confession_reports(self, interaction: discord.Interaction, user: Optional[discord.User] = None, export: Optional[bool] = False, limit: Optional[int] = 100):
-        if not interaction.user.guild_permissions.manage_messages and not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Permission insuffisante.", ephemeral=True)
-        try:
-            data = load_reports()
-            reports = data.get("reports", [])
-            if user:
-                reports = [r for r in reports if int(r.get("reporter_id", 0)) == user.id]
-            # tri du plus récent au plus ancien
-            def _key(r):
-                try:
-                    return r.get("timestamp") or ""
-                except Exception:
-                    return ""
-            reports = sorted(reports, key=_key, reverse=True)
-            total = len(reports)
-            if total == 0:
-                return await interaction.response.send_message("Aucun signalement trouvé.", ephemeral=True)
-
-            # préparation texte
-            lines = []
-            count = 0
-            for r in reports:
-                if limit and count >= max(1, int(limit)):
-                    break
-                count += 1
-                cid = r.get("confession_id")
-                rid = r.get("reporter_id")
-                rtag = r.get("reporter_tag")
-                reason = r.get("reason", "")
-                ts = r.get("timestamp", "")
-                lines.append(f"#{count}. Confession {cid} | Reporter {rtag} ({rid}) | {ts}\nRaison: {reason}")
-
-            text = "\n\n".join(lines)
-            if export:
-                # export fichier
-                try:
-                    file = discord.File(io.BytesIO(text.encode("utf-8")), filename="confession_reports.txt")
-                    await interaction.response.send_message(content=f"Rapport: {count}/{total} signalement(s)", file=file, ephemeral=True)
-                except Exception as e:
-                    logger.error(f"Erreur export reports: {e}")
-                    await interaction.response.send_message("❌ Erreur lors de l'export du fichier.", ephemeral=True)
-                return
-
-            # sinon embed résumé
-            desc = text
-            if len(desc) > 4000:
-                desc = desc[:4000] + "\n... (tronqué)"
-            embed = discord.Embed(title="📄 Signalements - Confessions", description=desc, color=discord.Color.red(), timestamp=datetime.now(timezone.utc))
-            embed.set_footer(text=f"Total trouvés: {total} | Affichés: {count}")
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-        except Exception as e:
-            logger.error(f"Erreur dans confession_reports: {e}")
-            try:
-                await interaction.response.send_message("❌ Erreur lors de la récupération des signalements.", ephemeral=True)
-            except Exception:
-                pass
             return False
 
 def load_confessions() -> Dict[str, Any]:
     """Charge les confessions avec gestion d'erreurs."""
-    return load_json_safe(CONFESSION_FILE, {"confessions": [], "message_channels": {}})
+    # next_id: prochain ID unique
+    # user_counts: {user_id: nb confessions}
+    # total_count: nb total de confessions
+    default = {"confessions": [], "message_channels": {}, "next_id": 1, "user_counts": {}, "total_count": 0}
+    return load_json_safe(CONFESSION_FILE, default)
 
 def save_confessions(data: Dict[str, Any]) -> bool:
     """Sauvegarde les confessions avec gestion d'erreurs."""
@@ -212,16 +152,32 @@ def save_actions(data: Dict[str, Any]) -> bool:
     """Sauvegarde le journal d'actions."""
     return save_json_safe(ACTIONS_FILE, data)
 
-def next_conf_id(data: Dict[str, Any]) -> int:
-    """Génère le prochain ID de confession."""
-    confessions = data.get("confessions", [])
-    if not confessions:
-        return 1
-    return max(c.get("id", 0) for c in confessions) + 1
+def _allocate_id_and_increment(data: Dict[str, Any], author_id: int) -> int:
+    """Alloue un ID unique persistant et incrémente les compteurs (total et par utilisateur)."""
+    nid = int(data.get("next_id", 1))
+    data["next_id"] = nid + 1
+    counts = data.get("user_counts", {})
+    key = str(author_id)
+    counts[key] = int(counts.get(key, 0)) + 1
+    data["user_counts"] = counts
+    data["total_count"] = int(data.get("total_count", 0)) + 1
+    return nid
 
 def user_conf_count(data: Dict[str, Any], user_id: int) -> int:
-    """Compte le nombre de confessions d'un utilisateur."""
-    return sum(1 for c in data.get("confessions", []) if c.get("author_id") == user_id)
+    """Retourne le nombre de confessions d'un utilisateur (persistant)."""
+    return int(data.get("user_counts", {}).get(str(user_id), 0))
+
+def _decrement_counters(data: Dict[str, Any], author_id: int) -> None:
+    try:
+        counts = data.get("user_counts", {})
+        key = str(author_id)
+        if key in counts and counts[key] > 0:
+            counts[key] -= 1
+        data["user_counts"] = counts
+        if int(data.get("total_count", 0)) > 0:
+            data["total_count"] = int(data["total_count"]) - 1
+    except Exception:
+        pass
 
 def validate_confession_text(text: str) -> Tuple[bool, str]:
     """Valide le texte d'une confession."""
@@ -498,6 +454,10 @@ class Confessions(commands.Cog):
 
                 # Retrait du stockage
                 try:
+                    # décrémente les compteurs puis retire l'entrée
+                    author_id = int(conf.get("author_id")) if conf.get("author_id") is not None else None
+                    if author_id is not None:
+                        _decrement_counters(data, author_id)
                     data["confessions"] = [c for c in data.get("confessions", []) if c.get("id") != self.confession_id]
                     save_confessions(data)
                 except Exception:
@@ -656,7 +616,7 @@ class Confessions(commands.Cog):
 
                 # Chargement et sauvegarde des données
                 data = load_confessions()
-                cid = next_conf_id(data)
+                cid = _allocate_id_and_increment(data, self.author.id)
                 now = datetime.now(timezone.utc).isoformat()
                 
                 # Stockage du channel_id pour optimiser le rechargement des vues
@@ -675,8 +635,8 @@ class Confessions(commands.Cog):
                 }
                 
                 data["confessions"].append(conf_obj)
-                
-                # Sauvegarde avec vérification d'erreur
+
+                # Sauvegarde avec vérification d'erreur (incluant compteurs et next_id)
                 if not save_confessions(data):
                     await interaction.followup.send("❌ Erreur lors de la sauvegarde. Réessaie plus tard.", ephemeral=True)
                     return
@@ -935,7 +895,7 @@ class Confessions(commands.Cog):
                     return
 
                 # Création de la nouvelle entrée de réponse
-                new_id = next_conf_id(data)
+                new_id = _allocate_id_and_increment(data, self.replier.id)
                 now = datetime.now(timezone.utc).isoformat()
                 channel_id = interaction.channel.id if interaction.channel else None
                 resp_obj = {
@@ -1506,28 +1466,51 @@ class Confessions(commands.Cog):
                             if found:
                                 break
                             try:
-                                # Recherche optimisée: d'abord les canaux texte, puis les threads actifs
-                                channels_to_search = guild.text_channels + [t for t in guild.threads if not t.archived]
-                                
-                                for channel in channels_to_search:
+                                # Parcourt les salons texte puis leurs threads actifs
+                                for tchan in guild.text_channels:
+                                    if found:
+                                        break
+                                    # 1) tenter dans le salon texte
                                     try:
-                                        msg = await channel.fetch_message(msg_id)
-                                        reply_enabled = not isinstance(channel, discord.Thread)
+                                        msg = await tchan.fetch_message(msg_id)
+                                        reply_enabled = not isinstance(tchan, discord.Thread)
                                         view = self.DynamicConfessView(self, conf["id"], reply_enabled=reply_enabled)
                                         self.bot.add_view(view)
-                                        
-                                        # Met à jour le channel_id pour les prochaines fois
+
                                         if not conf.get("channel_id"):
-                                            conf["channel_id"] = channel.id
+                                            conf["channel_id"] = tchan.id
                                             save_confessions(data)
-                                        
                                         found = True
                                         count += 1
                                         break
                                     except (discord.NotFound, discord.Forbidden):
-                                        continue
+                                        pass
                                     except Exception:
-                                        continue
+                                        pass
+
+                                    # 2) tenter dans les threads actifs de ce salon
+                                    try:
+                                        for th in getattr(tchan, "threads", []):
+                                            if found:
+                                                break
+                                            try:
+                                                msg = await th.fetch_message(msg_id)
+                                                reply_enabled = not isinstance(th, discord.Thread)
+                                                view = self.DynamicConfessView(self, conf["id"], reply_enabled=reply_enabled)
+                                                self.bot.add_view(view)
+
+                                                if not conf.get("channel_id"):
+                                                    conf["channel_id"] = th.id
+                                                    save_confessions(data)
+                                                found = True
+                                                count += 1
+                                                break
+                                            except (discord.NotFound, discord.Forbidden):
+                                                continue
+                                            except Exception:
+                                                continue
+                                    except Exception:
+                                        pass
                             except Exception:
                                 continue
                     
