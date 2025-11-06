@@ -20,6 +20,7 @@ CONFESSION_FILE = "confessions.json"
 BANS_FILE = "confession_bans.json"
 CONFIG_FILE = "confession_config.json"
 REPORTS_FILE = "confession_reports.json"
+ACTIONS_FILE = "confession_actions.json"
 
 # Centralized configuration
 _BOT_CFG = get_bot_config()
@@ -37,6 +38,7 @@ _file_locks = {
     BANS_FILE: threading.Lock(),
     CONFIG_FILE: threading.Lock(),
     REPORTS_FILE: threading.Lock(),
+    ACTIONS_FILE: threading.Lock(),
 }
 
 # Setup logging (centralized)
@@ -104,6 +106,70 @@ def save_json_safe(filepath: str, data: Dict[str, Any]) -> bool:
                     os.remove(f"{filepath}.tmp")
             except Exception:
                 pass
+
+    # -------------------------
+    # Admin slash: lister/exporter les signalements
+    # -------------------------
+    @app_commands.command(name="confession_reports", description="Lister ou exporter les signalements de confessions")
+    @app_commands.default_permissions(manage_messages=True)
+    @app_commands.describe(user="Filtrer par utilisateur ayant signalé", export="Exporter en fichier .txt", limit="Nombre max de lignes (par défaut 100)")
+    async def confession_reports(self, interaction: discord.Interaction, user: Optional[discord.User] = None, export: Optional[bool] = False, limit: Optional[int] = 100):
+        if not interaction.user.guild_permissions.manage_messages and not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Permission insuffisante.", ephemeral=True)
+        try:
+            data = load_reports()
+            reports = data.get("reports", [])
+            if user:
+                reports = [r for r in reports if int(r.get("reporter_id", 0)) == user.id]
+            # tri du plus récent au plus ancien
+            def _key(r):
+                try:
+                    return r.get("timestamp") or ""
+                except Exception:
+                    return ""
+            reports = sorted(reports, key=_key, reverse=True)
+            total = len(reports)
+            if total == 0:
+                return await interaction.response.send_message("Aucun signalement trouvé.", ephemeral=True)
+
+            # préparation texte
+            lines = []
+            count = 0
+            for r in reports:
+                if limit and count >= max(1, int(limit)):
+                    break
+                count += 1
+                cid = r.get("confession_id")
+                rid = r.get("reporter_id")
+                rtag = r.get("reporter_tag")
+                reason = r.get("reason", "")
+                ts = r.get("timestamp", "")
+                lines.append(f"#{count}. Confession {cid} | Reporter {rtag} ({rid}) | {ts}\nRaison: {reason}")
+
+            text = "\n\n".join(lines)
+            if export:
+                # export fichier
+                try:
+                    file = discord.File(io.BytesIO(text.encode("utf-8")), filename="confession_reports.txt")
+                    await interaction.response.send_message(content=f"Rapport: {count}/{total} signalement(s)", file=file, ephemeral=True)
+                except Exception as e:
+                    logger.error(f"Erreur export reports: {e}")
+                    await interaction.response.send_message("❌ Erreur lors de l'export du fichier.", ephemeral=True)
+                return
+
+            # sinon embed résumé
+            desc = text
+            if len(desc) > 4000:
+                desc = desc[:4000] + "\n... (tronqué)"
+            embed = discord.Embed(title="📄 Signalements - Confessions", description=desc, color=discord.Color.red(), timestamp=datetime.now(timezone.utc))
+            embed.set_footer(text=f"Total trouvés: {total} | Affichés: {count}")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            logger.error(f"Erreur dans confession_reports: {e}")
+            try:
+                await interaction.response.send_message("❌ Erreur lors de la récupération des signalements.", ephemeral=True)
+            except Exception:
+                pass
             return False
 
 def load_confessions() -> Dict[str, Any]:
@@ -137,6 +203,14 @@ def load_reports() -> Dict[str, Any]:
 def save_reports(data: Dict[str, Any]) -> bool:
     """Sauvegarde les signalements persistants."""
     return save_json_safe(REPORTS_FILE, data)
+
+def load_actions() -> Dict[str, Any]:
+    """Charge le journal d'actions persistantes (création, réponse, suppression, ban, unban)."""
+    return load_json_safe(ACTIONS_FILE, {"actions": []})
+
+def save_actions(data: Dict[str, Any]) -> bool:
+    """Sauvegarde le journal d'actions."""
+    return save_json_safe(ACTIONS_FILE, data)
 
 def next_conf_id(data: Dict[str, Any]) -> int:
     """Génère le prochain ID de confession."""
@@ -452,6 +526,23 @@ class Confessions(commands.Cog):
                 )
 
                 await interaction.followup.send("✅ Ta confession a été supprimée.", ephemeral=True)
+
+                # Journal d'action persistant (suppression)
+                try:
+                    actions = load_actions()
+                    al = actions.get("actions", [])
+                    al.append({
+                        "type": "delete",
+                        "confession_id": int(self.confession_id),
+                        "author_id": int(self.author.id),
+                        "author_tag": str(self.author),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "thread_id": int(thread_id) if thread_id else None,
+                    })
+                    actions["actions"] = al
+                    save_actions(actions)
+                except Exception:
+                    pass
             except Exception as e:
                 logger.error(f"Erreur dans DeleteModal.on_submit: {e}")
                 try:
@@ -653,6 +744,23 @@ class Confessions(commands.Cog):
                     timestamp=datetime.now(timezone.utc)
                 )
                 asyncio.create_task(self.cog.send_dm_safe(self.author, dm_embed))
+
+                # Journal d'action persistant
+                try:
+                    actions = load_actions()
+                    actions_list = actions.get("actions", [])
+                    actions_list.append({
+                        "type": "create",
+                        "confession_id": int(cid),
+                        "author_id": int(self.author.id),
+                        "author_tag": str(self.author),
+                        "timestamp": now,
+                        "channel_id": int(channel.id) if channel else None,
+                    })
+                    actions["actions"] = actions_list
+                    save_actions(actions)
+                except Exception:
+                    pass
                 
             except Exception as e:
                 logger.error(f"Erreur critique dans ConfessModal.on_submit: {e}")
@@ -894,6 +1002,24 @@ class Confessions(commands.Cog):
                         await self.cog.send_dm_safe(orig_user, dm_embed)
                     except Exception:
                         pass
+
+                    # Journal d'action persistant (réponse dans thread)
+                    try:
+                        actions = load_actions()
+                        al = actions.get("actions", [])
+                        al.append({
+                            "type": "reply",
+                            "confession_id": int(self.confession_id),
+                            "reply_id": int(new_id),
+                            "author_id": int(self.replier.id),
+                            "author_tag": str(self.replier),
+                            "timestamp": now,
+                            "thread_id": int(channel.id) if isinstance(channel, discord.Thread) else None,
+                        })
+                        actions["actions"] = al
+                        save_actions(actions)
+                    except Exception:
+                        pass
                 else:
                     try:
                         # not in a thread: find parent message by parent['message_id'] and create a thread
@@ -946,6 +1072,24 @@ class Confessions(commands.Cog):
                                                      description=f"Ta confession #{self.confession_id} a reçu une réponse.\n[Voir le fil]({link})",
                                                      color=discord.Color.orange())
                             await self.cog.send_dm_safe(orig_user, dm_embed)
+                        except Exception:
+                            pass
+
+                        # Journal d'action persistant (réponse créant thread)
+                        try:
+                            actions = load_actions()
+                            al = actions.get("actions", [])
+                            al.append({
+                                "type": "reply",
+                                "confession_id": int(self.confession_id),
+                                "reply_id": int(new_id),
+                                "author_id": int(self.replier.id),
+                                "author_tag": str(self.replier),
+                                "timestamp": now,
+                                "thread_id": int(thread.id),
+                            })
+                            actions["actions"] = al
+                            save_actions(actions)
                         except Exception:
                             pass
 
@@ -1009,6 +1153,168 @@ class Confessions(commands.Cog):
                     await interaction.followup.send("❌ Une erreur s'est produite. Réessaie plus tard.", ephemeral=True)
                 else:
                     await interaction.response.send_message("❌ Une erreur s'est produite. Réessaie plus tard.", ephemeral=True)
+            except Exception:
+                pass
+
+    # -------------------------
+    # Admin slash: ban / unban / bans (avec journal persistant)
+    # -------------------------
+    @app_commands.command(name="confession_ban", description="Bannir un utilisateur du système de confessions (durée optionnelle)")
+    @app_commands.default_permissions(manage_messages=True)
+    @app_commands.describe(user="Utilisateur à bannir", duration="10s, 5m, 2h, 1j (optionnel)", reason="Raison")
+    async def confession_ban(self, interaction: discord.Interaction, user: discord.User, duration: Optional[str] = None, reason: Optional[str] = None):
+        if not interaction.user.guild_permissions.manage_messages and not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Permission insuffisante.", ephemeral=True)
+        seconds = self._parse_duration_seconds(duration)
+        if duration and seconds is None:
+            return await interaction.response.send_message("❌ Durée invalide. Utilise p.ex. 10s, 5m, 2h, 1j.", ephemeral=True)
+        ok = self.add_ban(user.id, seconds)
+        if not ok:
+            return await interaction.response.send_message("❌ Erreur lors de l'enregistrement du ban.", ephemeral=True)
+        # DM notify (non bloquant)
+        dm = discord.Embed(title="🚫 Bannissement - Confessions", description=f"Tu es banni du système de confessions.{f' Durée: {duration}' if seconds else ''}\nRaison: {reason or 'Aucune'}", color=discord.Color.red(), timestamp=datetime.now(timezone.utc))
+        asyncio.create_task(self.send_dm_safe(user, dm))
+        await interaction.response.send_message(f"✅ {user} banni du système de confessions{f' pour {duration}' if seconds else ''}.")
+        await self.log_command("Ban Confession (slash)", f"{interaction.user} a banni {user} ({user.id}){f' pour {duration}' if seconds else ''}. Raison: {reason or 'Aucune'}", moderator=interaction.user, color=discord.Color.orange())
+        # Journal d'action persistant
+        try:
+            actions = load_actions()
+            al = actions.get("actions", [])
+            al.append({
+                "type": "ban",
+                "target_id": int(user.id),
+                "moderator_id": int(interaction.user.id),
+                "moderator_tag": str(interaction.user),
+                "duration": seconds,
+                "reason": reason or "",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            actions["actions"] = al
+            save_actions(actions)
+        except Exception:
+            pass
+
+    @app_commands.command(name="confession_unban", description="Débannir un utilisateur du système de confessions")
+    @app_commands.default_permissions(manage_messages=True)
+    @app_commands.describe(user="Utilisateur à débannir")
+    async def confession_unban(self, interaction: discord.Interaction, user: discord.User):
+        if not interaction.user.guild_permissions.manage_messages and not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Permission insuffisante.", ephemeral=True)
+        ok = self.remove_ban(user.id)
+        if not ok:
+            return await interaction.response.send_message("❌ Erreur lors de la suppression du ban.", ephemeral=True)
+        dm = discord.Embed(title="✅ Débannissement - Confessions", description="Tu peux de nouveau utiliser les confessions.", color=discord.Color.green(), timestamp=datetime.now(timezone.utc))
+        asyncio.create_task(self.send_dm_safe(user, dm))
+        await interaction.response.send_message(f"✅ {user} débanni du système de confessions.")
+        await self.log_command("Unban Confession (slash)", f"{interaction.user} a débanni {user} ({user.id})", moderator=interaction.user, color=discord.Color.green())
+        # Journal d'action persistant
+        try:
+            actions = load_actions()
+            al = actions.get("actions", [])
+            al.append({
+                "type": "unban",
+                "target_id": int(user.id),
+                "moderator_id": int(interaction.user.id),
+                "moderator_tag": str(interaction.user),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            actions["actions"] = al
+            save_actions(actions)
+        except Exception:
+            pass
+
+    @app_commands.command(name="confession_bans", description="Lister les bannissements du système de confessions")
+    @app_commands.default_permissions(manage_messages=True)
+    async def confession_bans(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.manage_messages and not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Permission insuffisante.", ephemeral=True)
+        bans = load_bans()
+        now = int(time.time())
+        entries = []
+        for e in bans.get("banned", []):
+            if isinstance(e, int):
+                entries.append((e, None))
+            else:
+                entries.append((e.get("user_id"), e.get("until")))
+        if not entries:
+            return await interaction.response.send_message("Aucun utilisateur banni.", ephemeral=True)
+        lines = []
+        for uid, until in entries:
+            try:
+                user = await self.bot.fetch_user(uid)
+                name = str(user)
+            except Exception:
+                name = f"ID {uid}"
+            if until:
+                remain = max(0, int(until) - now)
+                mins = remain // 60
+                lines.append(f"• {name} (reste ~{mins} min)")
+            else:
+                lines.append(f"• {name} (indéfini)")
+        desc = "\n".join(lines)
+        await interaction.response.send_message(embed=discord.Embed(title="🚫 Bannissements Confessions", description=desc[:4096], color=discord.Color.orange(), timestamp=datetime.now(timezone.utc)), ephemeral=True)
+
+    # -------------------------
+    # Admin slash: export journal d'actions (persistant)
+    # -------------------------
+    @app_commands.command(name="confession_actions", description="Lister/exporter le journal d'actions des confessions")
+    @app_commands.default_permissions(manage_messages=True)
+    @app_commands.describe(export="Exporter en fichier .txt", limit="Nombre max de lignes (défaut 100)")
+    async def confession_actions(self, interaction: discord.Interaction, export: Optional[bool] = False, limit: Optional[int] = 100):
+        if not interaction.user.guild_permissions.manage_messages and not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Permission insuffisante.", ephemeral=True)
+        try:
+            data = load_actions()
+            actions = data.get("actions", [])
+            # tri par timestamp
+            def _key(a):
+                try:
+                    return a.get("timestamp") or ""
+                except Exception:
+                    return ""
+            actions = sorted(actions, key=_key, reverse=True)
+            total = len(actions)
+            if total == 0:
+                return await interaction.response.send_message("Aucune action enregistrée.", ephemeral=True)
+
+            lines = []
+            count = 0
+            for a in actions:
+                if limit and count >= max(1, int(limit)):
+                    break
+                count += 1
+                t = a.get("type")
+                ts = a.get("timestamp", "")
+                if t == "create":
+                    lines.append(f"#{count}. CREATE conf#{a.get('confession_id')} par {a.get('author_tag')} ({a.get('author_id')}) | {ts}")
+                elif t == "reply":
+                    lines.append(f"#{count}. REPLY conf#{a.get('confession_id')} -> rep#{a.get('reply_id')} par {a.get('author_tag')} ({a.get('author_id')}) | {ts}")
+                elif t == "delete":
+                    lines.append(f"#{count}. DELETE conf#{a.get('confession_id')} par {a.get('author_tag')} ({a.get('author_id')}) | {ts}")
+                elif t == "ban":
+                    lines.append(f"#{count}. BAN {a.get('target_id')} par {a.get('moderator_tag')} | dur={a.get('duration')} | {ts}")
+                elif t == "unban":
+                    lines.append(f"#{count}. UNBAN {a.get('target_id')} par {a.get('moderator_tag')} | {ts}")
+                else:
+                    lines.append(f"#{count}. {t} | {ts}")
+
+            text = "\n".join(lines)
+            if export:
+                try:
+                    file = discord.File(io.BytesIO(text.encode("utf-8")), filename="confession_actions.txt")
+                    await interaction.response.send_message(content=f"Journal: {count}/{total} action(s)", file=file, ephemeral=True)
+                except Exception:
+                    await interaction.response.send_message("❌ Erreur lors de l'export.", ephemeral=True)
+                return
+
+            desc = text if len(text) <= 4000 else (text[:4000] + "\n... (tronqué)")
+            emb = discord.Embed(title="🗂️ Journal d'actions - Confessions", description=desc, color=discord.Color.blurple(), timestamp=datetime.now(timezone.utc))
+            emb.set_footer(text=f"Total: {total} | Affichés: {count}")
+            await interaction.response.send_message(embed=emb, ephemeral=True)
+        except Exception as e:
+            logger.error(f"Erreur dans confession_actions: {e}")
+            try:
+                await interaction.response.send_message("❌ Erreur lors de la récupération du journal.", ephemeral=True)
             except Exception:
                 pass
 

@@ -22,6 +22,20 @@ class Info(commands.Cog):
         )
         await interaction.response.send_message(embed=emb)
 
+    @app_commands.command(name="health", description="État de santé du bot (uptime, latence)")
+    async def health(self, interaction: discord.Interaction):
+        gateway_ms = round(self.bot.latency * 1000)
+        emb = brand_embed("✅ Health")
+        add_kv_fields(
+            emb,
+            {
+                "Uptime": format_uptime(),
+                "Gateway": f"{gateway_ms} ms",
+            },
+            inline=True,
+        )
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+
     @app_commands.command(name="botinfo", description="Informations sur le bot")
     async def botinfo(self, interaction: discord.Interaction):
         guilds = len(self.bot.guilds)
